@@ -1,14 +1,9 @@
-
 import torch
-import torch.utils
-import torch.nn.functional as F
-import torch.fx as fx
-import tmdla
-from py_tmdla import print_err
+import torchdynamo
+from py_tmdla import to_mdla, print_err
 
 INP = 64
 OUTP = 64
-
 
 class model(torch.nn.Module):
     def __init__(self):
@@ -26,15 +21,11 @@ class model(torch.nn.Module):
         y = self.op(x)
         return y
 
-
+example_inputs = torch.ones(1, INP, 1, 1)*0.1
 nn_module = model()
 
-example_inputs = torch.ones(1, INP, 1, 1)*0.1
-torchscript_trace = torch.jit.trace(nn_module, example_inputs)
-torchscript_trace = torch.jit.freeze(torchscript_trace.eval())
-
-v = tmdla.tmdla_compile(torchscript_trace.graph, [example_inputs])
-yy = tmdla.tmdla_run(v, example_inputs)
+with torchdynamo.optimize(to_mdla):
+    yy = nn_module(example_inputs)
 
 print(yy.shape)
 
