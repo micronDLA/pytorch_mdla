@@ -44,6 +44,11 @@ static int get_node_inputnames(Node *node, thnets::network *net, int n)
     return mod_idx;
 }
 
+/*!
+compile torchscript graph <torch.Graph> to run on MDLA
+    @param graph: torch.Graph
+    @param tensors: List of torch.Tensor
+*/
 void *tmdla_compile(Graph &graph, std::vector<torch::Tensor> &tensors)
 {
     std::unordered_map<Value *, torch::Tensor> value_to_tensor;
@@ -229,6 +234,11 @@ void *tmdla_compile(Graph &graph, std::vector<torch::Tensor> &tensors)
     return (void *)cinfo;
 }
 
+/*!
+run a MDLA compiled graph
+    @param cinf: MDLA compiled graph <Compiled_info> created using tmdla_compile
+    @param tensor: input tensor
+*/
 torch::Tensor tmdla_run(void *cinf, torch::Tensor &tensor)
 {
     Compiled_info *cinfo = (Compiled_info *)cinf;
@@ -248,6 +258,9 @@ torch::Tensor tmdla_run(void *cinf, torch::Tensor &tensor)
     return out_tensor;
 }
 
+/*!
+pybind: create tmdla module with tmdla_compile and tmdla_run functions
+*/
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
 {
     m.doc() = "pybind11 example plugin"; // optional module docstring
