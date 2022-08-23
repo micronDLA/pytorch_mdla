@@ -60,6 +60,23 @@ c10::List<at::Tensor> get_listtensor(IValue *input)
     return input->toTensorList();
 }
 
+static void print_node(Node *node)
+{
+    std::cout << "Running this " << node->kind().toDisplayString() << " inputs: " << node->inputs().size() << std::endl;
+    std::cout << "input:";
+    for (int ii = 0; ii < node->inputs().size(); ii++)
+    {
+        std::cout << node->inputs()[ii]->unique() << ", ";
+    }
+    std::cout << std::endl;
+    std::cout << "output: ";
+    for (int ii = 0; ii < node->outputs().size(); ii++)
+    {
+        std::cout << node->outputs()[ii]->unique() << ", ";
+    }
+    std::cout << std::endl;
+}
+
 bool find_tensor(Value *input, at::Tensor *tensor, std::unordered_map<Value *, torch::Tensor> value_to_tensor)
 {
     if (value_to_tensor.find(input) != value_to_tensor.end())
@@ -74,9 +91,13 @@ bool find_tensor(Value *input, at::Tensor *tensor, std::unordered_map<Value *, t
         {
             if (node->kind() == prim::Constant && input == node->outputs()[0])
             {
+
                 auto ivalue = toIValue(node->outputs()[0]);
-                *tensor = ivalue->toTensor();
-                return true;
+                if (ivalue->isTensor())
+                {
+                    *tensor = ivalue->toTensor();
+                    return true;
+                }
             }
         }
     }

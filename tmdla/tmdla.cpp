@@ -95,13 +95,11 @@ void *tmdla_compile(Graph &graph, std::vector<torch::Tensor> &tensors)
             assert(ret);
             assert(kk.has_storage());
             float *weight = (float *)kk.data_ptr();
-            std::cout << "Found kk find_tensor " << kk.sizes() << std::endl;
             ret = find_tensor(node->input(2), &bb, value_to_tensor);
             float *bias = NULL;
             if (ret)
             {
                 bias = (float *)bb.data_ptr();
-                std::cout << "Found bb find_tensor " << bb.sizes() << std::endl;
             }
             int outp, inp, kW, kH = 1, dW, dH = 1, pW, pH = 0, dlW, dlH = 1, opW = 0, opH = 0, group;
             bool transpose = false;
