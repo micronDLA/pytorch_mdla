@@ -24,7 +24,7 @@ class MDLA_parts:
         return partition
 
 def tmdla_run(tensor_in, mod=None):
-    out = tmdla.tmdla_run(mod, tensor_in)
+    out = tmdla._c.tmdla_run(mod, tensor_in)
     return out
 
 def to_mdla(fx_trace: torch.fx.GraphModule, example_inputs: List[torch.Tensor]):
@@ -53,7 +53,7 @@ def to_mdla(fx_trace: torch.fx.GraphModule, example_inputs: List[torch.Tensor]):
             if 'mdla' in n.name: # run on mdla
                 ts_trace = torch.jit.trace(a, xx)
                 ts_trace = torch.jit.freeze(ts_trace.eval())
-                v = tmdla.tmdla_compile(ts_trace.graph, [xx])
+                v = tmdla._c.tmdla_compile(ts_trace.graph, [xx])
                 fun = partial(tmdla_run, mod=v)
                 exec_graph.append(fun)
             else: # fallback to pytorch run

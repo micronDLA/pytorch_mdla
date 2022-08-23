@@ -4,7 +4,7 @@ import torch.utils
 import torch.nn.functional as F
 import torch.fx as fx
 import tmdla
-from py_tmdla import print_err
+from tmdla import print_err
 
 INP = 64
 OUTP = 64
@@ -33,8 +33,8 @@ example_inputs = torch.ones(1, INP, 1, 1)*0.1
 torchscript_trace = torch.jit.trace(nn_module, example_inputs)
 torchscript_trace = torch.jit.freeze(torchscript_trace.eval())
 
-v = tmdla.tmdla_compile(torchscript_trace.graph, [example_inputs])
-yy = tmdla.tmdla_run(v, example_inputs)
+v = tmdla._c.tmdla_compile(torchscript_trace.graph, [example_inputs])
+yy = tmdla._c.tmdla_run(v, example_inputs)
 
 print(yy.shape)
 

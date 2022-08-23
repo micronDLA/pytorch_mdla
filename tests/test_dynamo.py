@@ -1,6 +1,6 @@
 import torch
 import torchdynamo
-from py_tmdla import to_mdla, print_err
+from tmdla import to_mdla, print_err
 
 class modelC(torch.nn.Module):
     def __init__(self):
