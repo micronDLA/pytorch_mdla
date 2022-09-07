@@ -1,6 +1,3 @@
-# License
-Copyright (c) 2019 Micron Technology, Inc. All Rights Reserved. This source code contains confidential information and trade secrets of Micron Technology, Inc. Use, disclosure, or reproduction is prohibited without the prior express written permission of Micron Technology, Inc.
-
 # Adding MDLA to pytorch backend
 
 This folder contains example implementation of mdla backend for pytorch [torchdynamo](https://github.com/pytorch/torchdynamo).
