@@ -15,6 +15,7 @@ using namespace torch::jit;
 
 static std::string inputnames[MAX_INPUTS];
 static int ninputnames;
+int th_debug = 0;
 
 static int get_node_inputnames(Node *node, thnets::network *net, int n)
 {
@@ -44,6 +45,40 @@ static int get_node_inputnames(Node *node, thnets::network *net, int n)
     return mod_idx;
 }
 
+// aten:: operations that is supported and can be combined together into mdla::CompilationGroup
+bool canHandle(const torch::jit::Node *node)
+{
+    switch (node->kind())
+    {
+    case prim::Constant:
+    case prim::ListConstruct:
+    case aten::conv1d:
+    case aten::conv2d:
+    case aten::_convolution:
+    case aten::linear:
+    case aten::view:
+    case aten::batch_norm:
+    case aten::cat:
+    case aten::upsample_nearest2d:
+        //        case aten::matmul:
+        //        case aten::mm:
+        //        case aten::addmm:
+    case aten::mul:
+    case aten::add:
+    case aten::sub:
+    case aten::relu:
+    case aten::relu_:
+    case aten::tanh:
+    case aten::sigmoid:
+    // case aten::avg_pool2d:
+    case aten::max_pool2d:
+        return true;
+    default:
+        return false;
+    }
+    return false;
+}
+
 /*!
 compile torchscript graph <torch.Graph> to run on MDLA
     @param graph: torch.Graph
@@ -71,135 +106,319 @@ void *tmdla_compile(Graph &graph, std::vector<torch::Tensor> &tensors)
     net->nelem = 0;
     ninputnames = 0;
     torch::Tensor in_tensor;
-    bool first_node = true;
+    bool ret, first_node = true;
     // get layers
     int n = 0;
     for (auto node : graph.nodes())
     {
         int num_input = 1;
-        if (node->kind() != prim::Constant &&
-            node->kind() != prim::ListConstruct &&
-            (node->kind() == aten::conv2d || node->kind() == aten::_convolution || node->kind() == aten::conv1d))
+        if (canHandle(node) && node->kind() != prim::Constant && node->kind() != prim::ListConstruct)
         {
-            // at::conv2d(input, weight, bias, stride, padding, dilation, groups);
-            // at::_convolution(input, weight, bias, stride, padding, dilation, transposed, output_padding, groups, benchmark, deterministic, cudnn_enabled);
-            bool ret;
+            bool added_module = true;
             if (first_node) // TODO: find all nodes that takes input
             {
                 ret = find_tensor(node->input(0), &in_tensor, value_to_tensor);
                 assert(ret);
             }
 
-            at::Tensor kk, bb;
-            ret = find_tensor(node->input(1), &kk, value_to_tensor);
-            assert(ret);
-            assert(kk.has_storage());
-            float *weight = (float *)kk.data_ptr();
-            ret = find_tensor(node->input(2), &bb, value_to_tensor);
-            float *bias = NULL;
-            if (ret)
+            if (node->kind() == aten::conv2d || node->kind() == aten::_convolution || node->kind() == aten::conv1d)
             {
-                bias = (float *)bb.data_ptr();
-            }
-            int outp, inp, kW, kH = 1, dW, dH = 1, pW, pH = 0, dlW, dlH = 1, opW = 0, opH = 0, group;
-            bool transpose = false;
-            if (node->kind() == aten::conv1d)
-            { // conv1d
-                outp = kk.sizes()[0];
-                inp = kk.sizes()[1];
-                kW = kk.sizes()[2];
-                dW = get_const_intlist(node->input(3))[0];
-                pW = get_const_intlist(node->input(4))[0];
-                dlW = get_const_intlist(node->input(5))[0];
-                group = get_const_int(node->input(6));
-            }
-            else
-            { // conv2d
-                outp = kk.sizes()[0];
-                inp = kk.sizes()[1];
-                kW = kk.sizes()[3];
-                kH = kk.sizes()[2];
-                if (node->kind() == aten::_convolution)
+                // at::conv2d(input, weight, bias, stride, padding, dilation, groups);
+                // at::_convolution(input, weight, bias, stride, padding, dilation, transposed, output_padding, groups, benchmark, deterministic, cudnn_enabled);
+
+                at::Tensor kk, bb;
+                ret = find_tensor(node->input(1), &kk, value_to_tensor);
+                assert(ret);
+                assert(kk.has_storage());
+                float *weight = (float *)kk.data_ptr();
+                ret = find_tensor(node->input(2), &bb, value_to_tensor);
+                float *bias = NULL;
+                if (ret)
                 {
-                    dH = dW = get_const_intlist(node->input(3))[0];
-                    pH = pW = get_const_intlist(node->input(4))[0];
-                    dlH = dlW = get_const_intlist(node->input(5))[0];
-                    opH = opW = get_const_intlist(node->input(7))[0];
-                    transpose = get_const_bool(node->input(6));
-                    group = get_const_int(node->input(8));
+                    bias = (float *)bb.data_ptr();
+                }
+                int outp, inp, kW, kH = 1, dW, dH = 1, pW, pH = 0, dlW, dlH = 1, opW = 0, opH = 0, group;
+                bool transpose = false;
+                if (node->kind() == aten::conv1d)
+                { // conv1d
+                    outp = kk.sizes()[0];
+                    inp = kk.sizes()[1];
+                    kW = kk.sizes()[2];
+                    dW = get_const_intlist(node->input(3))[0];
+                    pW = get_const_intlist(node->input(4))[0];
+                    dlW = get_const_intlist(node->input(5))[0];
+                    group = get_const_int(node->input(6));
+                }
+                else
+                { // conv2d
+                    outp = kk.sizes()[0];
+                    inp = kk.sizes()[1];
+                    kW = kk.sizes()[3];
+                    kH = kk.sizes()[2];
+                    if (node->kind() == aten::_convolution)
+                    {
+                        dH = dW = get_const_intlist(node->input(3))[0];
+                        pH = pW = get_const_intlist(node->input(4))[0];
+                        dlH = dlW = get_const_intlist(node->input(5))[0];
+                        opH = opW = get_const_intlist(node->input(7))[0];
+                        transpose = get_const_bool(node->input(6));
+                        group = get_const_int(node->input(8));
+                    }
+                    else
+                    {
+                        dW = get_const_intlist(node->input(3))[0];
+                        dH = get_const_intlist(node->input(3))[1];
+                        pW = get_const_intlist(node->input(4))[0];
+                        pH = get_const_intlist(node->input(4))[1];
+                        dlW = get_const_intlist(node->input(5))[0];
+                        dlH = get_const_intlist(node->input(5))[1];
+                        group = get_const_int(node->input(6));
+                    }
+                }
+
+                if (transpose)
+                {
+                    int tt = inp; // swap inp and outp
+                    inp = outp;
+                    outp = tt;
+                    if (th_debug > 1)
+                        printf("trans_spconv_%d_%d_%dx%ds%dx%dp%dx%ddl%dx%dgrp%d\n", inp, outp, kW, kH, dW, dH, pW, pH, dlW, dlH, group);
+                    thload_TransposedConv2d(net->modules + n, weight, bias, inp, outp, kW, kH, pW, pH, dW, dH, opW, opH, group);
                 }
                 else
                 {
-                    dW = get_const_intlist(node->input(3))[0];
-                    dH = get_const_intlist(node->input(3))[1];
-                    pW = get_const_intlist(node->input(4))[0];
-                    pH = get_const_intlist(node->input(4))[1];
-                    dlW = get_const_intlist(node->input(5))[0];
-                    dlH = get_const_intlist(node->input(5))[1];
-                    group = get_const_int(node->input(6));
+                    if (th_debug > 1)
+                        printf("spconv_%d_%d_%dx%ds%dx%dp%dx%ddl%dx%dgrp%d\n", inp, outp, kW, kH, dW, dH, pW, pH, dlW, dlH, group);
+                    thload_Conv2d(net->modules + n, weight, bias, inp, outp, kW, kH, pW, pH, dW, dH, dlW, dlH, group);
                 }
             }
-            printf("spconv_%dx%dx%ds%dx%dp%dx%ddl%dx%dgrp%d\n", outp, kW, kH, dW, dH, pW, pH, dlW, dlH, group);
-            if (transpose)
+            else if (node->kind() == aten::linear)
             {
-                int tt = inp; // swap inp and outp
-                inp = outp;
-                outp = tt;
-                thload_TransposedConv2d(net->modules + n, weight, bias, inp, outp, kW, kH, pW, pH, dW, dH, opW, opH, group);
+                at::Tensor kk, bb;
+                ret = find_tensor(node->input(1), &kk, value_to_tensor);
+                assert(ret);
+                assert(kk.has_storage());
+                float *weight = (float *)kk.data_ptr();
+                ret = find_tensor(node->input(2), &bb, value_to_tensor);
+                float *bias = NULL;
+                if (ret)
+                {
+                    bias = (float *)bb.data_ptr();
+                }
+                int i = 0, o = 0;
+                o = kk.sizes()[0];
+                i = kk.sizes()[1];
+                if (th_debug > 1)
+                    printf("linear_%dx%d\n", i, o);
+                thload_Linear(net->modules + n, weight, bias, i, o);
             }
-            else
-                thload_Conv2d(net->modules + n, weight, bias, inp, outp, kW, kH, pW, pH, dW, dH, dlW, dlH, group);
-
-            // TODO: get name of input and output
-            // connect layers with input output ids
-            if (num_input == 1)
-            { // one input layers
+            else if (node->kind() == aten::cat)
+            {
+                // c10::List<at::Tensor> lten = get_listtensor(&value_to_ivalue[node->input(0)]);
+                Node *nn = node->input(0)->node();
+                int axis = get_const_int(node->input(1));
+                num_input = nn->inputs().size();
+                for (unsigned x = 0; x < nn->inputs().size(); x++)
+                {
+                    net->modules[n].inputs.push_back(get_node_inputnames(nn, net, x));
+                    net->modules[n].all_inputs.push_back(0);
+                }
+                if (th_debug > 1)
+                    printf("concat\n");
+                thload_Concat(net->modules + n, axis);
+            }
+            else if (node->kind() == aten::upsample_nearest2d)
+            {
+                int h_scale = get_const_intlist(node->input(1))[0];
+                int w_scale = get_const_intlist(node->input(1))[1];
+                if (th_debug > 1)
+                    printf("upsample_%dx%d\n", w_scale, h_scale);
+                thload_Upsample(net->modules + n, w_scale, h_scale);
+            }
+            else if (node->kind() == aten::add)
+            {
+                num_input = 2;
                 net->modules[n].inputs.push_back(get_node_inputnames(node, net, 0));
                 net->modules[n].all_inputs.push_back(0);
+                net->modules[n].inputs.push_back(get_node_inputnames(node, net, 1));
+                net->modules[n].all_inputs.push_back(0);
+                if (th_debug > 1)
+                    printf("add\n");
+                thload_Add(net->modules + n);
             }
+            else if (node->kind() == aten::sub)
+            {
+                num_input = 2;
+                net->modules[n].inputs.push_back(get_node_inputnames(node, net, 0));
+                net->modules[n].all_inputs.push_back(0);
+                net->modules[n].inputs.push_back(get_node_inputnames(node, net, 1));
+                net->modules[n].all_inputs.push_back(0);
+                if (th_debug > 1)
+                    printf("sub\n");
+                thload_Sub(net->modules + n);
+            }
+            else if (node->kind() == aten::mul)
+            {
+                num_input = 2;
+                net->modules[n].inputs.push_back(get_node_inputnames(node, net, 0));
+                net->modules[n].all_inputs.push_back(0);
+                net->modules[n].inputs.push_back(get_node_inputnames(node, net, 1));
+                net->modules[n].all_inputs.push_back(0);
+                if (th_debug > 1)
+                    printf("mul\n");
+                thload_BatchNorm(net->modules + n, NULL, NULL, NULL, NULL, 0, 1);
+            }
+            else if (node->kind() == aten::batch_norm)
+            {
+                // aten::batch_norm(Tensor input, Tensor? weight, Tensor? bias, Tensor? running_mean, Tensor? running_var, bool training, float momentum, float eps, bool cudnn_enabled)
+                float *weight = NULL;
+                int s = 0;
+                at::Tensor bb;
+                ret = find_tensor(node->input(1), &bb, value_to_tensor);
+                if (ret)
+                {
+                    s = bb.sizes()[0];
+                    weight = (float *)bb.data_ptr();
+                }
+                float *bias = NULL;
+                ret = find_tensor(node->input(2), &bb, value_to_tensor);
+                if (ret)
+                {
+                    if (s != bb.sizes()[0])
+                        s = bb.sizes()[0];
+                    bias = (float *)bb.data_ptr();
+                }
+                float *run_mean = NULL;
+                ret = find_tensor(node->input(3), &bb, value_to_tensor);
+                if (ret)
+                {
+                    if (s != bb.sizes()[0])
+                        s = bb.sizes()[0];
+                    run_mean = (float *)bb.data_ptr();
+                }
+                float *run_var = NULL;
+                ret = find_tensor(node->input(3), &bb, value_to_tensor);
+                if (ret)
+                {
+                    if (s != bb.sizes()[0])
+                        s = bb.sizes()[0];
+                    run_var = (float *)bb.data_ptr();
+                }
+                int eps = get_const_double(node->input(7));
+                if (th_debug > 1)
+                    printf("batchnorm\n");
+                thload_BatchNorm(net->modules + n, weight, bias, run_mean, run_var, eps, s);
+            }
+            else if (node->kind() == aten::relu || node->kind() == aten::relu_)
+            {
+                if (th_debug > 1)
+                    printf("relu\n");
+                thload_Threshold(net->modules + n);
+            }
+            else if (node->kind() == aten::tanh)
+                thload_Tanh(net->modules + n);
+            else if (node->kind() == aten::sigmoid)
+                thload_Sigmoid(net->modules + n);
+            else if (node->kind() == aten::view)
+                thload_View(net->modules + n);
 
-            std::string outstr = std::to_string(node->output(0)->unique());
-            net->modules[n].outputs.push_back(thnets::THNTensor_new(thnets::DT_FLOAT, outstr.c_str()));
-            net->modules[n].outidx[0] = 1; // TODO: set this correctly
-            net->nelem = ++n;
-            first_node = false;
+            else if (node->kind() == aten::max_pool2d || node->kind() == aten::avg_pool2d)
+            {
+                // aten::max_pool2d(Tensor self, int[2] kernel_size, int[2] stride=[], int[2] padding=0, int[2] dilation=1, bool ceil_mode=False)
+                // aten::avg_pool2d(Tensor self, int[2] kernel_size, int[2] stride=[], int[2] padding=0, bool ceil_mode=False, bool count_include_pad=True, int? divisor_override=None)
+                int kW, kH, dW, dH, pW, pH, dlW, dlH, ceil;
+                kW = get_const_intlist(node->input(1))[0];
+                kH = get_const_intlist(node->input(1))[1];
+                if (!get_const_intlist(node->input(2)).empty())
+                {
+                    dW = get_const_intlist(node->input(2))[0];
+                    dH = get_const_intlist(node->input(2))[1];
+                }
+                else
+                {
+                    dW = kW;
+                    dH = kH;
+                }
+                pW = get_const_intlist(node->input(3))[0];
+                pH = get_const_intlist(node->input(3))[1];
+                if (node->kind() == aten::max_pool2d)
+                {
+                    dlW = get_const_intlist(node->input(4))[0];
+                    dlH = get_const_intlist(node->input(4))[1];
+                    ceil = get_const_bool(node->input(5));
+                    if (th_debug > 1)
+                        printf("maxpool_%dx%ds%dx%dp%dx%d\n", kW, kH, dW, dH, pW, pH);
+                    thload_Maxpool2d(net->modules + n, kW, kH, pW, pH, dW, dH, dlW, dlH, ceil);
+                }
+                else
+                {
+                    ceil = get_const_bool(node->input(4));
+                    if (th_debug > 1)
+                        printf("avgpool_%dx%ds%dx%dp%dx%d\n", kW, kH, dW, dH, pW, pH);
+                    thload_Avgpool2d(net->modules + n, kW, kH, pW, pH, dW, dH, ceil);
+                }
+            }
+            else
+            {
+                added_module = false;
+            }
+            // TODO: get name of input and output
+            // connect layers with input output ids
+            if (added_module)
+            {
+                std::string in_id = std::to_string(node->input(0)->unique());
+                net->modules[n].inputs.push_back(get_node_inputnames(node, net, 0));
+                net->modules[n].all_inputs.push_back(0);
+                for (int j = 0; j < (int) node->outputs().size(); j++)
+                {
+                    std::string outstr = std::to_string(node->output(j)->unique());
+                    net->modules[n].outputs.push_back(thnets::THNTensor_new(thnets::DT_FLOAT, outstr.c_str()));
+                }
+                net->modules[n].net = net;
+                net->nelem = ++n;
+                first_node = false;
+            }
         }
+    } // all graph.nodes
+
+    for (size_t i = 1; i < graph.inputs().size(); ++i) // weights, bias may come from input
+    {
+        auto value_input = graph.inputs()[i];
+        value_to_tensor[value_input] = tensors[i - 1];
     }
     // get input shapes
     // TODO: support list of inputs
-    char image[100];
+    char image[100], sbuf[10];
     int inW = 1, inH = 1, inP = 1, inZ = 1;
     unsigned ninputs = 1;
     { // get input size
-        inP = in_tensor.sizes()[1];
-        if (in_tensor.sizes().size() == 4)
-        { // WxHxPxB
-            inH = in_tensor.sizes()[2];
-            inW = in_tensor.sizes()[3];
-            sprintf(image, "1x%dx%dx%d", inP, inH, inW);
-        }
-        else if (in_tensor.sizes().size() == 5)
-        { // WxHxZxPxB
-            inZ = in_tensor.sizes()[2];
-            inH = in_tensor.sizes()[3];
-            inW = in_tensor.sizes()[4];
-            sprintf(image, "1x%dx%dx%dx%d", inP, inZ, inH, inW);
-        }
-        else if (in_tensor.sizes().size() == 1)
-        { // P
-            inP = in_tensor.sizes()[0];
-            sprintf(image, "1x%dx%dx%d", inP, 1, 1);
-        }
-        else
-        { // WxPxB
-            inW = in_tensor.sizes()[2];
-            sprintf(image, "1x%dx%dx%d", inP, 1, inW);
+        inP = (in_tensor.sizes().size() == 1) ? in_tensor.sizes()[0] : in_tensor.sizes()[1];
+        sprintf(image, "1x%d", inP);
+        for(int j = 2; j < in_tensor.sizes().size(); j++){
+            sprintf(sbuf, "x%d", in_tensor.sizes()[j]);
+            strcat(image, sbuf);
         }
     }
     thnets::thnetwork_add_input(net, std::to_string(0).c_str());
-    thnets::thnetwork_add_output(net, std::to_string(1).c_str());
+    for (unsigned n = 0; n < graph.outputs().size(); n++)
+    {
+        for (int i = 0; i < net->nelem; i++)
+        {
+            for (size_t j = 0; j < net->modules[i].outputs.size(); ++j)
+            {
+                bool scm = strcmp(net->modules[i].outputs[j]->name.c_str(), std::to_string(graph.outputs()[n]->unique()).c_str());
+                if (scm == 0)
+                {
+                    net->modules[i].outidx[j] = n + 1;
+                    thnets::thnetwork_add_output(net, std::to_string(n + 1).c_str());
+                    break;
+                }
+            }
+        }
+    }
+
     // TODO: pass debug as param
-    std::string debug = "bw";
+    std::string debug = (th_debug > 1) ? "bw" : "";
     std::string options = "";
     std::string clusters_ = "1";
     if (!debug.empty())
@@ -213,6 +432,8 @@ void *tmdla_compile(Graph &graph, std::vector<torch::Tensor> &tensors)
     unsigned *noutdims;
     unsigned noutputs = 0;
     uint64_t **outshapes;
+    if (th_debug > 1)
+        printf("compile with image size: %s\n", image);
     // pass THNETWORK to thnets2lst to create lst
     ext_thnets2lst(cmem, net, image, 1);
     // ie_compile: skip onnx parser if already lst exist and modelpath="$keeplst"

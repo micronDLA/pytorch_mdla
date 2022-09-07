@@ -3,11 +3,11 @@ Copyright (c) 2019 Micron Technology, Inc. All Rights Reserved. This source code
 
 # Adding MDLA to pytorch backend
 
-This folder contains example implementation of mdla backend for pytorch with [functorch](https://github.com/pytorch/functorch) and [torchdynamo](https://github.com/pytorch/torchdynamo).
+This folder contains example implementation of mdla backend for pytorch [torchdynamo](https://github.com/pytorch/torchdynamo).
 
 ## Install
 
-Install [functorch](https://github.com/pytorch/functorch) and [torchdynamo](https://github.com/pytorch/torchdynamo)
+Install [torchdynamo](https://github.com/pytorch/torchdynamo)
 
 ## Build and Test tmdla
 
@@ -26,16 +26,16 @@ Run torch.trace graph with mdla
 python3 test.py
 ```
 
-Run functorch with mdla
-
-```
-python3 test_functorch.py
-```
-
 Run torchdynamo with mdla
 
 ```
 python3 test_dynamo.py
+```
+
+Run a torchvision model with mdla
+
+```
+python3 test_model.py alexnet
 ```
 
 ## Torchscript MDLA
