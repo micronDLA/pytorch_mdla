@@ -64,13 +64,13 @@ static void print_node(Node *node)
 {
     std::cout << "Running this " << node->kind().toDisplayString() << " inputs: " << node->inputs().size() << std::endl;
     std::cout << "input:";
-    for (int ii = 0; ii < node->inputs().size(); ii++)
+    for (int ii = 0; ii < (int) node->inputs().size(); ii++)
     {
         std::cout << node->inputs()[ii]->unique() << ", ";
     }
     std::cout << std::endl;
     std::cout << "output: ";
-    for (int ii = 0; ii < node->outputs().size(); ii++)
+    for (int ii = 0; ii < (int) node->outputs().size(); ii++)
     {
         std::cout << node->outputs()[ii]->unique() << ", ";
     }

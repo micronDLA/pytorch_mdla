@@ -25,6 +25,12 @@ class MDLA_parts:
         partition = tag + '_' + str(self.partition_counter)
         return partition
 
+def tmdla_options(opt):
+    """
+    MDLA compile options: https://github.com/micronDLA/SDK/blob/master/docs/Codes.md
+    format: opt = -d <debug> -o <option> -c <num cluster> 
+    """
+    tmdla._c.tmdla_options(opt)
 
 def tmdla_run(tensor_in, mod=None):
     out = tmdla._c.tmdla_run(mod, tensor_in)
@@ -57,15 +63,14 @@ def to_mdla(fx_trace: torch.fx.GraphModule, example_inputs: List[torch.Tensor]):
 
     exec_graph = []  # list of compiled functions to run
     xx = example_inputs[0]
-    print(module_with_submodules)
     for n in module_with_submodules.graph.nodes:
         if n.op == 'call_module':
             a = module_with_submodules.get_submodule(n.target)
             if 'mdla' in n.name:  # run on mdla
                 ts_trace = torch.jit.trace(a, xx)
                 ts_trace = torch.jit.freeze(ts_trace.eval())
-                v = tmdla._c.tmdla_compile(ts_trace.graph, [xx])
-                fun = partial(tmdla_run, mod=v)
+                cinf = tmdla._c.tmdla_compile(ts_trace.graph, [xx])
+                fun = partial(tmdla_run, mod=cinf)
                 exec_graph.append(fun)
             else:  # fallback to pytorch run
                 exec_graph.append(a)

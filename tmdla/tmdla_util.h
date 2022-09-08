@@ -14,15 +14,21 @@ class Compiled_info
 {
 public:
     void *cmem;
+    //to run mdla
     uint64_t input_elements[MAX_INPUTS];
     unsigned ninputs;
-
     uint64_t output_elements[MAX_INPUTS];
     unsigned noutputs;
+    //to create output torch Tensor
     unsigned *noutdims;
     uint64_t **outshapes;
+    uint64_t laddr_off;
 
-    Compiled_info(void *cm) : cmem(cm){};
+    Compiled_info(void *cm)
+    {
+        memset((void *)this, 0, sizeof(this));
+        cmem = cm;
+    };
     ~Compiled_info()
     {
         ie_free(cmem);

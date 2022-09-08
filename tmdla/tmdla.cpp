@@ -79,6 +79,18 @@ bool canHandle(const torch::jit::Node *node)
     return false;
 }
 
+void *prev_cmem = NULL;//get the device init from prev context obj
+uint64_t laddr_off = 0;// address to combine models in memory
+
+std::string cmd_options = "";
+/*!
+set MDLA compile options https://github.com/micronDLA/SDK/blob/master/docs/Codes.md
+*/
+void tmdla_options(std::string opt)
+{
+    cmd_options = opt;
+}
+
 /*!
 compile torchscript graph <torch.Graph> to run on MDLA
     @param graph: torch.Graph
@@ -96,9 +108,6 @@ void *tmdla_compile(Graph &graph, std::vector<torch::Tensor> &tensors)
     int g_size = 0;
     for (auto node : graph.nodes())
         g_size++;
-
-    void *cmem;
-    cmem = ie_create();
 
     // create net
     thnets::THInit();
@@ -389,13 +398,15 @@ void *tmdla_compile(Graph &graph, std::vector<torch::Tensor> &tensors)
     // get input shapes
     // TODO: support list of inputs
     char image[100], sbuf[10];
-    int inW = 1, inH = 1, inP = 1, inZ = 1;
     unsigned ninputs = 1;
+    int inP = 1, inSz = 1;
     { // get input size
         inP = (in_tensor.sizes().size() == 1) ? in_tensor.sizes()[0] : in_tensor.sizes()[1];
         sprintf(image, "1x%d", inP);
-        for(int j = 2; j < in_tensor.sizes().size(); j++){
-            sprintf(sbuf, "x%d", in_tensor.sizes()[j]);
+        inSz = inP;
+        for(int j = 2; j < (int) in_tensor.sizes().size(); j++){
+            sprintf(sbuf, "x%d", (int) in_tensor.sizes()[j]);
+            inSz *= in_tensor.sizes()[j];
             strcat(image, sbuf);
         }
     }
@@ -417,18 +428,48 @@ void *tmdla_compile(Graph &graph, std::vector<torch::Tensor> &tensors)
         }
     }
 
-    // TODO: pass debug as param
-    std::string debug = (th_debug > 1) ? "bw" : "";
-    std::string options = "";
-    std::string clusters_ = "1";
-    if (!debug.empty())
-        ie_setflag(cmem, "debug", debug.c_str());
-    if (!options.empty())
-        ie_setflag(cmem, "options", options.c_str());
-    if (clusters_ != "1")
-    {
-        ie_setflag(cmem, "nclusters", clusters_.c_str());
+    //compile MDLA
+    void *cmem;
+    Compiled_info *cinfo;
+
+    cmem = ie_create();
+    if (prev_cmem!=NULL)
+    { // combine the code in main memory and use same pico obj
+        char s[100];
+        sprintf(s, "%ld", laddr_off);
+        ie_setflag(cmem, "addr_off", s);//set addroff for new cmem to be combined with prev_cmem
     }
+    cinfo = new Compiled_info(cmem);
+    if (th_debug > 1)
+        printf("OPTIONS: %s\n", cmd_options.c_str());
+
+    std::string sp = " ";
+    std::string cur_str = cmd_options;
+    std::string prev_str = "";
+    size_t pos = 0;
+    cur_str.append(" ");
+    while ((pos = cur_str.find(sp)) != std::string::npos) 
+    {
+        if(prev_str == "-d")
+        {
+            ie_setflag(cmem, "debug", cur_str.substr(0, pos).c_str());
+            prev_str = "";
+        }
+        else if(prev_str == "-o")
+        {
+            ie_setflag(cmem, "options", cur_str.substr(0, pos).c_str());
+            prev_str = "";
+        }
+        else if(prev_str == "-c")
+        {
+            ie_setflag(cmem, "nclusters", cur_str.substr(0, pos).c_str());
+            prev_str = "";
+        }
+        else
+            prev_str = cur_str.substr(0, pos);
+        cur_str.erase(0, pos + sp.length());
+    }
+
     unsigned *noutdims;
     unsigned noutputs = 0;
     uint64_t **outshapes;
@@ -437,12 +478,12 @@ void *tmdla_compile(Graph &graph, std::vector<torch::Tensor> &tensors)
     // pass THNETWORK to thnets2lst to create lst
     ext_thnets2lst(cmem, net, image, 1);
     // ie_compile: skip onnx parser if already lst exist and modelpath="$keeplst"
-    cmem = ie_compile(cmem, "$keeplst", 0, image, &noutputs, &noutdims, &outshapes, 0);
-    Compiled_info *cinfo = new Compiled_info(cmem);
-
-    cinfo->input_elements[0] = inP * inH * inW;
+    cmem = ie_compile(cmem, "$keeplst", 0, image, &noutputs, &noutdims, &outshapes, prev_cmem);
+    ie_getinfo(cmem, "addr_off", &laddr_off, sizeof(laddr_off));//save cmem and addr_off for next compiled subgraph
+    prev_cmem = cmem;
+    cinfo->laddr_off = laddr_off;
+    cinfo->input_elements[0] = inSz;
     cinfo->ninputs = ninputs;
-
     cinfo->noutputs = noutputs;
     cinfo->noutdims = noutdims;
     cinfo->outshapes = outshapes;
@@ -485,4 +526,5 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
     m.doc() = "pybind11 example plugin"; // optional module docstring
     m.def("tmdla_compile", &tmdla_compile, "tmdla_compile");
     m.def("tmdla_run", &tmdla_run, "tmdla_run");
+    m.def("tmdla_options", &tmdla_options, "tmdla_options");
 }
