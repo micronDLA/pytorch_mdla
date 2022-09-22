@@ -5,12 +5,13 @@ This folder contains example implementation of mdla backend for pytorch [torchdy
 ## Install
 
 Install [torchdynamo](https://github.com/pytorch/torchdynamo)
+```
+pip3 install torchdynamo
+```
 
 ## Build and Test tmdla
 
-Add `api.h`, `thvector.h`, `thnets.h` and `thnets.def` into this folder
-
-Then run:
+Run:
 ```
 python3 setup.py install
 ```
